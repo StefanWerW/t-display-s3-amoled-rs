@@ -65,10 +65,10 @@ fn main() -> ! {
     let mut rst = Output::new(peripherals.GPIO17, Level::High, OutputConfig::default());
     let mut cs = Output::new(peripherals.GPIO6, Level::High, OutputConfig::default());
 
-    let d0 = peripherals.GPIO18;
-    let d1 = peripherals.GPIO7;
-    let d2 = peripherals.GPIO48;
-    let d3 = peripherals.GPIO5;
+    let d0 = peripherals.GPIO18; // MOSI
+    let d1 = peripherals.GPIO7;  // DC
+
+    let dc = Output::new(d1, Level::High, OutputConfig::default());
 
     let spi = Spi::new(
         peripherals.SPI2,
@@ -77,12 +77,9 @@ fn main() -> ! {
             .with_mode(Mode::_0)
     ).unwrap()
         .with_sck(sclk)
-        .with_mosi(d0)
-        .with_miso(d1)
-        .with_sio2(d2)
-        .with_sio3(d3);
+        .with_mosi(d0);
 
-    let mut display = t_display_s3_amoled::rm67162::RM67162::new(spi, cs);
+    let mut display = t_display_s3_amoled::rm67162::RM67162::new(spi, cs, dc);
     display.reset(&mut rst, &mut delay).unwrap();
     println!("reset display");
     display.init(&mut delay).unwrap();

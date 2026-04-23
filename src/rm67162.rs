@@ -33,20 +33,23 @@ impl Orientation {
     }
 }
 
-pub struct RM67162<'a, CS> {
+pub struct RM67162<'a, CS, DC> {
     spi: Spi<'a, Blocking>,
     cs: CS,
+    dc: DC,
     orientation: Orientation,
 }
 
-impl<CS> RM67162<'_, CS>
+impl<CS, DC> RM67162<'_, CS, DC>
 where
     CS: OutputPin,
+    DC: OutputPin,
 {
-    pub fn new<'a>(spi: Spi<'a, Blocking>, cs: CS) -> RM67162<'a, CS> {
+    pub fn new<'a>(spi: Spi<'a, Blocking>, cs: CS, dc: DC) -> RM67162<'a, CS, DC> {
         RM67162 {
             spi,
             cs,
+            dc,
             orientation: Orientation::Portrait,
         }
     }
@@ -68,15 +71,28 @@ where
 
     fn send_cmd(&mut self, cmd: u32, data: &[u8]) -> Result<(), ()> {
         self.cs.set_low().unwrap();
+        self.dc.set_low().unwrap();
         self.spi
             .half_duplex_write(
                 DataMode::Single,
-                Command::_8Bit(0x02, DataMode::Single),
-                Address::_24Bit(cmd << 8, DataMode::Single),
+                Command::None,
+                Address::None,
                 0,
-                data,
+                &[cmd as u8],
             )
             .unwrap();
+        self.dc.set_high().unwrap();
+        if !data.is_empty() {
+            self.spi
+                .half_duplex_write(
+                    DataMode::Single,
+                    Command::None,
+                    Address::None,
+                    0,
+                    data,
+                )
+                .unwrap();
+        }
         self.cs.set_high().unwrap();
         Ok(())
     }
@@ -84,10 +100,11 @@ where
     // rm67162_qspi_init
     pub fn init(&mut self, delay: &mut impl embedded_hal_1::delay::DelayNs) -> Result<(), ()> {
         for _ in 0..3 {
+            self.send_cmd(0xFE, &[0x00])?;
             self.send_cmd(0x11, &[])?; // sleep out
             delay.delay_ms(120);
 
-            self.send_cmd(0x3A, &[0x55])?; // 16bit mode
+            self.send_cmd(0x3A, &[0x75])?; // 16bit mode
 
             self.send_cmd(0x51, &[0x00])?; // write brightness
 
@@ -127,11 +144,22 @@ where
     pub fn draw_point(&mut self, x: u16, y: u16, color: Rgb565) -> Result<(), ()> {
         self.set_address(x, y, x, y)?;
         self.cs.set_low().unwrap();
+        self.dc.set_low().unwrap();
         self.spi
             .half_duplex_write(
-                DataMode::Quad,
-                Command::_8Bit(0x32, DataMode::Single),
-                Address::_24Bit(0x2C << 8, DataMode::Single),
+                DataMode::Single,
+                Command::None,
+                Address::None,
+                0,
+                &[0x2C],
+            )
+            .unwrap();
+        self.dc.set_high().unwrap();
+        self.spi
+            .half_duplex_write(
+                DataMode::Single,
+                Command::None,
+                Address::None,
                 0,
                 &color.to_be_bytes()[..],
             )
@@ -150,48 +178,22 @@ where
     ) -> Result<(), ()> {
         self.set_address(x, y, x + w - 1, y + h - 1)?;
         self.cs.set_low().unwrap();
+        self.dc.set_low().unwrap();
         self.spi
             .half_duplex_write(
-                DataMode::Quad,
-                Command::_8Bit(0x32, DataMode::Single),
-                Address::_24Bit(0x2C << 8, DataMode::Single),
+                DataMode::Single,
+                Command::None,
+                Address::None,
                 0,
-                &colors.next().unwrap().to_be_bytes()[..],
+                &[0x2C],
             )
             .unwrap();
+        self.dc.set_high().unwrap();
 
-        for _ in 1..((w as u32) * (h as u32)) {
+        for color in colors {
             self.spi
                 .half_duplex_write(
-                    DataMode::Quad,
-                    Command::None,
-                    Address::None,
-                    0,
-                    &colors.next().unwrap().to_be_bytes()[..],
-                )
-                .unwrap();
-        }
-        self.cs.set_high().unwrap();
-        Ok(())
-    }
-
-    fn fill_color(&mut self, x: u16, y: u16, w: u16, h: u16, color: Rgb565) -> Result<(), ()> {
-        self.set_address(x, y, x + w - 1, y + h - 1)?;
-        self.cs.set_low().unwrap();
-        self.spi
-            .half_duplex_write(
-                DataMode::Quad,
-                Command::_8Bit(0x32, DataMode::Single),
-                Address::_24Bit(0x2C << 8, DataMode::Single),
-                0,
-                &color.to_be_bytes()[..],
-            )
-            .unwrap();
-
-        for _ in 1..((w as u32) * (h as u32)) {
-            self.spi
-                .half_duplex_write(
-                    DataMode::Quad,
+                    DataMode::Single,
                     Command::None,
                     Address::None,
                     0,
@@ -199,14 +201,48 @@ where
                 )
                 .unwrap();
         }
+
+        self.cs.set_high().unwrap();
+        Ok(())
+    }
+
+    fn fill_color(&mut self, x: u16, y: u16, w: u16, h: u16, color: Rgb565) -> Result<(), ()> {
+        self.set_address(x, y, x + w - 1, y + h - 1)?;
+        self.cs.set_low().unwrap();
+        self.dc.set_low().unwrap();
+        self.spi
+            .half_duplex_write(
+                DataMode::Single,
+                Command::None,
+                Address::None,
+                0,
+                &[0x2C],
+            )
+            .unwrap();
+        self.dc.set_high().unwrap();
+
+        let color_bytes = color.to_be_bytes();
+        for _ in 0..((w as u32) * (h as u32)) {
+            self.spi
+                .half_duplex_write(
+                    DataMode::Single,
+                    Command::None,
+                    Address::None,
+                    0,
+                    &color_bytes[..],
+                )
+                .unwrap();
+        }
+
         self.cs.set_high().unwrap();
         Ok(())
     }
 }
 
-impl<CS> OriginDimensions for RM67162<'_, CS>
+impl<CS, DC> OriginDimensions for RM67162<'_, CS, DC>
 where
     CS: OutputPin,
+    DC: OutputPin,
 {
     fn size(&self) -> Size {
         if matches!(
@@ -220,9 +256,10 @@ where
     }
 }
 
-impl<CS> DrawTarget for RM67162<'_, CS>
+impl<CS, DC> DrawTarget for RM67162<'_, CS, DC>
 where
     CS: OutputPin,
+    DC: OutputPin,
 {
     type Color = Rgb565;
 
