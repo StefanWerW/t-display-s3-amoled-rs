@@ -11,8 +11,8 @@ use embedded_graphics::{
 use embedded_hal_1::{delay::DelayNs, digital::OutputPin};
 
 use hal::{
-    prelude::_esp_hal_dma_DmaTransfer,
-    spi::{HalfDuplexMode, SpiDataMode, master::{dma::SpiDma, Command, Address}},
+    spi::master::{SpiDma, Command, Address, DataMode},
+    Blocking,
 };
 
 use crate::rm67162::Orientation;
@@ -22,9 +22,10 @@ pub const SCREEN_SIZE: Size = Size::new(240, 536);
 const BUFFER_PIXELS: usize = 16368 / 2;
 const BUFFER_SIZE: usize = BUFFER_PIXELS * 2;
 static mut DMA_BUFFER: [u8; BUFFER_SIZE] = [0u8; BUFFER_SIZE];
+static mut DMA_DESCRIPTORS: [hal::dma::DmaDescriptor; 4] = [hal::dma::DmaDescriptor::EMPTY; 4];
 
 pub type SpiType<'d> =
-    SpiDma<'d, hal::peripherals::SPI2, hal::gdma::Channel0, HalfDuplexMode>;
+    SpiDma<'d, Blocking>;
 
 pub struct RM67162Dma<'a, CS> {
     spi: Option<SpiType<'a>>,
@@ -68,15 +69,17 @@ where
 
         let mut spi = self.spi.take().unwrap();
         let tx = spi
-            .write(
-                SpiDataMode::Single,
-                Command::Command8(0x02, SpiDataMode::Single),
-                Address::Address24(cmd << 8, SpiDataMode::Single),
+            .half_duplex_write(
+                DataMode::Single,
+                Command::_8Bit(0x02, DataMode::Single),
+                Address::_24Bit(cmd << 8, DataMode::Single),
                 0,
+                data.len(),
                 txbuf,
             )
             .unwrap();
-        (_, spi) = tx.wait().unwrap();
+        let (spi_back, _) = tx.wait();
+        spi = spi_back;
         self.spi.replace(spi);
 
         self.cs.set_high().unwrap();
@@ -136,15 +139,17 @@ where
 
         let mut spi = self.spi.take().unwrap();
         let tx = spi
-            .write(
-                SpiDataMode::Quad,
-                Command::Command8(0x32, SpiDataMode::Single),
-                Address::Address24(0x2C << 8, SpiDataMode::Single),
+            .half_duplex_write(
+                DataMode::Quad,
+                Command::_8Bit(0x32, DataMode::Single),
+                Address::_24Bit(0x2C << 8, DataMode::Single),
                 0,
+                2,
                 txbuf,
             )
             .unwrap();
-        (_, spi) = tx.wait().unwrap();
+        let (spi_back, _) = tx.wait();
+        spi = spi_back;
         self.spi.replace(spi);
 
         self.cs.set_high().unwrap();
@@ -154,21 +159,24 @@ where
     #[inline]
     fn dma_send_colors(&mut self, txbuf: StaticReadBuffer, first_send: bool) -> Result<(), ()> {
         let mut spi = self.spi.take().unwrap();
+        let len = txbuf.len;
 
         let tx = if first_send {
-            spi.write(
-                SpiDataMode::Quad,
-                Command::Command8(0x32, SpiDataMode::Single),
-                Address::Address24(0x2C << 8, SpiDataMode::Single),
+            spi.half_duplex_write(
+                DataMode::Quad,
+                Command::_8Bit(0x32, DataMode::Single),
+                Address::_24Bit(0x2C << 8, DataMode::Single),
                 0,
+                len,
                 txbuf,
             )
             .unwrap()
         } else {
-            spi.write(SpiDataMode::Quad, Command::None, Address::None, 0, txbuf)
+            spi.half_duplex_write(DataMode::Quad, Command::None, Address::None, 0, len, txbuf)
                 .unwrap()
         };
-        (_, spi) = tx.wait().unwrap();
+        let (spi_back, _) = tx.wait();
+        spi = spi_back;
         self.spi.replace(spi);
         Ok(())
     }
@@ -340,11 +348,63 @@ impl StaticReadBuffer {
     }
 }
 
-unsafe impl hal::prelude::_embedded_dma_ReadBuffer for StaticReadBuffer {
-    type Word = u8;
+unsafe impl hal::dma::DmaTxBuffer for StaticReadBuffer {
+    type View = Self;
+    type Final = Self;
 
-    #[inline]
-    unsafe fn read_buffer(&self) -> (*const Self::Word, usize) {
-        (self.buffer, self.len)
+    fn prepare(&mut self) -> hal::dma::Preparation {
+        let len = self.len;
+        let mut ptr = self.buffer as *mut u8;
+        
+        let mut remaining = len;
+        let mut i = 0;
+        unsafe {
+            if len == 0 {
+                DMA_DESCRIPTORS[0] = hal::dma::DmaDescriptor::EMPTY;
+                DMA_DESCRIPTORS[0].set_length(0);
+                DMA_DESCRIPTORS[0].set_size(0);
+                DMA_DESCRIPTORS[0].set_owner(hal::dma::Owner::Dma);
+                DMA_DESCRIPTORS[0].set_suc_eof(true);
+                DMA_DESCRIPTORS[0].buffer = core::ptr::null_mut();
+            } else {
+                while remaining > 0 {
+                    let chunk_len = core::cmp::min(remaining, 4092);
+                    DMA_DESCRIPTORS[i] = hal::dma::DmaDescriptor::EMPTY;
+                    DMA_DESCRIPTORS[i].set_length(chunk_len);
+                    DMA_DESCRIPTORS[i].set_size(chunk_len);
+                    DMA_DESCRIPTORS[i].buffer = ptr;
+                    DMA_DESCRIPTORS[i].set_owner(hal::dma::Owner::Dma);
+                    
+                    remaining -= chunk_len;
+                    ptr = ptr.add(chunk_len);
+                    
+                    if remaining > 0 {
+                        DMA_DESCRIPTORS[i].next = DMA_DESCRIPTORS.as_mut_ptr().add(i + 1);
+                        DMA_DESCRIPTORS[i].set_suc_eof(false);
+                    } else {
+                        DMA_DESCRIPTORS[i].next = core::ptr::null_mut();
+                        DMA_DESCRIPTORS[i].set_suc_eof(true);
+                    }
+                    i += 1;
+                }
+            }
+        }
+        
+        hal::dma::Preparation {
+            start: unsafe { DMA_DESCRIPTORS.as_mut_ptr() },
+            direction: hal::dma::TransferDirection::Out,
+            accesses_psram: false,
+            burst_transfer: hal::dma::BurstConfig::default(),
+            check_owner: Some(true),
+            auto_write_back: false,
+        }
+    }
+
+    fn into_view(self) -> Self::View {
+        self
+    }
+
+    fn from_view(view: Self::View) -> Self::Final {
+        view
     }
 }

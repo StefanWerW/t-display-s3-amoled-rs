@@ -8,8 +8,8 @@ use embedded_graphics::{
 };
 use embedded_hal_1::{delay::DelayNs, digital::OutputPin};
 use hal::{
-    peripherals::SPI2,
-    spi::{HalfDuplexMode, SpiDataMode, master::{Spi, Command, Address, HalfDuplexReadWrite}},
+    spi::master::{Spi, Command, Address, DataMode},
+    Blocking,
 };
 
 pub mod dma;
@@ -34,7 +34,7 @@ impl Orientation {
 }
 
 pub struct RM67162<'a, CS> {
-    spi: Spi<'a, SPI2, HalfDuplexMode>,
+    spi: Spi<'a, Blocking>,
     cs: CS,
     orientation: Orientation,
 }
@@ -43,7 +43,7 @@ impl<CS> RM67162<'_, CS>
 where
     CS: OutputPin,
 {
-    pub fn new<'a>(spi: Spi<'a, SPI2, HalfDuplexMode>, cs: CS) -> RM67162<'a, CS> {
+    pub fn new<'a>(spi: Spi<'a, Blocking>, cs: CS) -> RM67162<'a, CS> {
         RM67162 {
             spi,
             cs,
@@ -69,10 +69,10 @@ where
     fn send_cmd(&mut self, cmd: u32, data: &[u8]) -> Result<(), ()> {
         self.cs.set_low().unwrap();
         self.spi
-            .write(
-                SpiDataMode::Single,
-                Command::Command8(0x02, SpiDataMode::Single),
-                Address::Address24(cmd << 8, SpiDataMode::Single),
+            .half_duplex_write(
+                DataMode::Single,
+                Command::_8Bit(0x02, DataMode::Single),
+                Address::_24Bit(cmd << 8, DataMode::Single),
                 0,
                 data,
             )
@@ -128,10 +128,10 @@ where
         self.set_address(x, y, x, y)?;
         self.cs.set_low().unwrap();
         self.spi
-            .write(
-                SpiDataMode::Quad,
-                Command::Command8(0x32, SpiDataMode::Single),
-                Address::Address24(0x2C << 8, SpiDataMode::Single),
+            .half_duplex_write(
+                DataMode::Quad,
+                Command::_8Bit(0x32, DataMode::Single),
+                Address::_24Bit(0x2C << 8, DataMode::Single),
                 0,
                 &color.to_be_bytes()[..],
             )
@@ -151,10 +151,10 @@ where
         self.set_address(x, y, x + w - 1, y + h - 1)?;
         self.cs.set_low().unwrap();
         self.spi
-            .write(
-                SpiDataMode::Quad,
-                Command::Command8(0x32, SpiDataMode::Single),
-                Address::Address24(0x2C << 8, SpiDataMode::Single),
+            .half_duplex_write(
+                DataMode::Quad,
+                Command::_8Bit(0x32, DataMode::Single),
+                Address::_24Bit(0x2C << 8, DataMode::Single),
                 0,
                 &colors.next().unwrap().to_be_bytes()[..],
             )
@@ -162,8 +162,8 @@ where
 
         for _ in 1..((w as u32) * (h as u32)) {
             self.spi
-                .write(
-                    SpiDataMode::Quad,
+                .half_duplex_write(
+                    DataMode::Quad,
                     Command::None,
                     Address::None,
                     0,
@@ -179,10 +179,10 @@ where
         self.set_address(x, y, x + w - 1, y + h - 1)?;
         self.cs.set_low().unwrap();
         self.spi
-            .write(
-                SpiDataMode::Quad,
-                Command::Command8(0x32, SpiDataMode::Single),
-                Address::Address24(0x2C << 8, SpiDataMode::Single),
+            .half_duplex_write(
+                DataMode::Quad,
+                Command::_8Bit(0x32, DataMode::Single),
+                Address::_24Bit(0x2C << 8, DataMode::Single),
                 0,
                 &color.to_be_bytes()[..],
             )
@@ -190,8 +190,8 @@ where
 
         for _ in 1..((w as u32) * (h as u32)) {
             self.spi
-                .write(
-                    SpiDataMode::Quad,
+                .half_duplex_write(
+                    DataMode::Quad,
                     Command::None,
                     Address::None,
                     0,

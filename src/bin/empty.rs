@@ -7,10 +7,27 @@ use core::mem::MaybeUninit;
 use esp_backtrace as _;
 use esp_println::println;
 use hal::{
-    clock::ClockControl, peripherals::Peripherals, prelude::*, timer::TimerGroup, Delay, Rtc, IO,
+    delay::Delay,
+    gpio::{Output, Input, Level, Pull, OutputConfig, InputConfig},
 };
+
 #[global_allocator]
 static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
+
+#[unsafe(export_name = "esp_app_desc")]
+#[unsafe(link_section = ".rodata_desc")]
+#[used]
+pub static ESP_APP_DESC: esp_bootloader_esp_idf::EspAppDesc = esp_bootloader_esp_idf::EspAppDesc::new_internal(
+    env!("CARGO_PKG_VERSION"),
+    env!("CARGO_PKG_NAME"),
+    "00:00:00",
+    "2026-04-23",
+    "esp-hal",
+    0,
+    u16::MAX,
+    65536,
+    0,
+);
 
 fn init_heap() {    
     const HEAP_SIZE: usize = 32 * 1024;
@@ -21,44 +38,20 @@ fn init_heap() {
     }
 }
 
-#[hal::entry]
+#[hal::main]
 fn main() -> ! {
     init_heap();
-    let peripherals = Peripherals::take();
-    let system = peripherals.SYSTEM.split();
-    let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
+    let peripherals = hal::init(hal::Config::default());
 
-    // Disable the RTC and TIMG watchdog timers
-    let mut rtc = Rtc::new(peripherals.LPWR);
-    let timer_group0 = TimerGroup::new(
-        peripherals.TIMG0,
-        &clocks,
-    );
-    let mut wdt0 = timer_group0.wdt;
-    let timer_group1 = TimerGroup::new(
-        peripherals.TIMG1,
-        &clocks,
-    );
-    let mut wdt1 = timer_group1.wdt;
-    rtc.rwdt.disable();
-    wdt0.disable();
-    wdt1.disable();
     println!("Hello world!");
 
-    // Set GPIO4 as an output, and set its state high initially.
-    let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
-    let mut led = io.pins.gpio38.into_push_pull_output();
-    let _button = io.pins.gpio21.into_pull_down_input();
+    let mut led = Output::new(peripherals.GPIO38, Level::High, OutputConfig::default());
+    let _button = Input::new(peripherals.GPIO21, InputConfig::default().with_pull(Pull::Down));
 
-    led.set_high().unwrap();
-
-    // Initialize the Delay peripheral, and use it to toggle the LED state in a
-    // loop.
-    let mut delay = Delay::new(&clocks);
+    let delay = Delay::new();
 
     loop {
-        let _ = led.toggle();
-
-        delay.delay_ms(1000_u32);
+        led.toggle();
+        delay.delay_millis(1000);
     }
 }

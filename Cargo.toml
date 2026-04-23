@@ -11,22 +11,20 @@ categories = ["hardware-support", "no-std", "embedded"]
 description = "BSP for T-Display S3 AMOLED, ESP32-S3 board with RM67162 AMOLED display"
 keywords = ["rm67162", "amoled"]
 readme = "README.md"
+default-run = "amoled"
 
 [dependencies]
-hal = { package = "esp32s3-hal", version = "0.15.0", features = [
-    "async",
-    "embassy",
-    "embassy-time-timg0",
-    "rt",
-    
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32s3"] }
+hal = { package = "esp-hal", version = "1.0.0", features = [
+    "esp32s3",
+    "unstable",
 ] }
-esp-backtrace = { version = "0.7.0", features = [
+esp-backtrace = { version = "0.19.0", features = [
     "esp32s3",
     "panic-handler",
-    "exception-handler",
-    "print-uart",
+    "println",
 ] }
-esp-println = { version = "0.5.0", features = ["esp32s3"] }
+esp-println = { version = "0.17.0", features = ["esp32s3"] }
 esp-alloc = { version = "0.3.0" }
 
 embassy-executor = { version = "0.5", features = [

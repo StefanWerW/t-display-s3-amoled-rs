@@ -13,21 +13,33 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::text::{Alignment, Text};
 use esp_backtrace as _;
 use esp_println::println;
-use hal::gpio::NO_PIN;
-use hal::prelude::_fugit_RateExtU32;
-use hal::systimer::SystemTimer;
-use hal::{
-    clock::ClockControl,
-    peripherals::Peripherals,
-    prelude::*,
-    timer::TimerGroup,
-    Delay, Rtc, IO,
-};
-use hal::spi::master::Spi;
 
+use hal::{
+    delay::Delay,
+    gpio::{Io, Output, Level, OutputConfig},
+    spi::master::{Config as SpiConfig, Spi},
+    spi::Mode,
+    time::Rate,
+};
 
 #[global_allocator]
 static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
+
+
+#[unsafe(export_name = "esp_app_desc")]
+#[unsafe(link_section = ".rodata_desc")]
+#[used]
+pub static ESP_APP_DESC: esp_bootloader_esp_idf::EspAppDesc = esp_bootloader_esp_idf::EspAppDesc::new_internal(
+    env!("CARGO_PKG_VERSION"),
+    env!("CARGO_PKG_NAME"),
+    "00:00:00",
+    "2026-04-23",
+    "esp-hal",
+    0,
+    u16::MAX,
+    65536,
+    0,
+);
 
 fn init_heap() {    
     const HEAP_SIZE: usize = 32 * 1024;
@@ -38,62 +50,37 @@ fn init_heap() {
     }
 }
 
-#[hal::entry]
+#[hal::main]
 fn main() -> ! {
     init_heap();
-    let peripherals = Peripherals::take();
-    let system = peripherals.SYSTEM.split();
-    let clocks = ClockControl::boot_defaults(system.clock_control).freeze();
-
-    // Disable the RTC and TIMG watchdog timers
-    let mut rtc = Rtc::new(peripherals.LPWR);
-    let timer_group0 = TimerGroup::new(
-        peripherals.TIMG0,
-        &clocks,
-    );
-    let mut wdt0 = timer_group0.wdt;
-    let timer_group1 = TimerGroup::new(
-        peripherals.TIMG1,
-        &clocks,
-    );
-    let mut wdt1 = timer_group1.wdt;
-    rtc.rwdt.disable();
-    wdt0.disable();
-    wdt1.disable();
+    let peripherals = hal::init(hal::Config::default());
     println!("Hello world!");
 
-    // Initialize the Delay peripheral, and use it to toggle the LED state in a
-    // loop.
-    let mut delay = Delay::new(&clocks);
+    let mut delay = Delay::new();
 
-    // Set GPIO4 as an output, and set its state high initially.
-    let io = IO::new(peripherals.GPIO, peripherals.IO_MUX);
-    let mut led = io.pins.gpio38.into_push_pull_output();
-    //let user_btn = io.pins.gpio21.into_pull_down_input();
-    //let boot0_btn = io.pins.gpio0.into_pull_up_input(); // default pull up
+    let mut led = Output::new(peripherals.GPIO38, Level::High, OutputConfig::default());
     println!("GPIO init OK");
 
-    let sclk = io.pins.gpio47;
-    let rst = io.pins.gpio17;
-    let cs = io.pins.gpio6;
+    let sclk = peripherals.GPIO47;
+    let mut rst = Output::new(peripherals.GPIO17, Level::High, OutputConfig::default());
+    let mut cs = Output::new(peripherals.GPIO6, Level::High, OutputConfig::default());
 
-    let d0 = io.pins.gpio18;
-    let d1 = io.pins.gpio7;
-    let d2 = io.pins.gpio48;
-    let d3 = io.pins.gpio5;
+    let d0 = peripherals.GPIO18;
+    let d1 = peripherals.GPIO7;
+    let d2 = peripherals.GPIO48;
+    let d3 = peripherals.GPIO5;
 
-    let mut rst = rst.into_push_pull_output();
-
-    led.set_high().unwrap();
-    let spi = Spi::new_half_duplex(
-        peripherals.SPI2, // use spi2 host
-        75_u32.MHz(), // max 75MHz
-        hal::spi::SpiMode::Mode0,
-        &clocks)
-        .with_pins(Some(sclk),Some(d0),Some(d1),Some(d2),Some(d3),NO_PIN);
-
-    let mut cs = cs.into_push_pull_output();
-    cs.set_high().unwrap();
+    let spi = Spi::new(
+        peripherals.SPI2,
+        SpiConfig::default()
+            .with_frequency(Rate::from_mhz(75))
+            .with_mode(Mode::_0)
+    ).unwrap()
+        .with_sck(sclk)
+        .with_mosi(d0)
+        .with_miso(d1)
+        .with_sio2(d2)
+        .with_sio3(d3);
 
     let mut display = t_display_s3_amoled::rm67162::RM67162::new(spi, cs);
     display.reset(&mut rst, &mut delay).unwrap();
@@ -119,13 +106,13 @@ fn main() -> ! {
     .unwrap();
 
     let mut cnt = 0;
-    let started = now_ms();
+    let started = hal::time::Instant::now().duration_since_epoch().as_millis();
 
     loop {
         // fps testing
         let mut s = String::new();
 
-        let elapsed = now_ms() - started;
+        let elapsed = hal::time::Instant::now().duration_since_epoch().as_millis() - started;
         core::write!(
             &mut s,
             "Frames: {}\nFPS: {:.1}",
@@ -151,8 +138,4 @@ fn main() -> ! {
         .unwrap();
         cnt += 1;
     }
-}
-
-fn now_ms() -> u64 {
-    SystemTimer::now() * 1_000 / SystemTimer::TICKS_PER_SECOND
 }
