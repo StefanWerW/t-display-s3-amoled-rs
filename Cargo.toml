@@ -36,13 +36,15 @@ embassy-time = "0.3.0"
 
 
 embedded-hal-1 = { package = "embedded-hal", version = "1.0.0" }
-embedded-graphics = { version = "0.8.0" }
+embedded-graphics = { version = "0.8.2", features = ["nalgebra_support"] }
 slint = { version = "1.0.2", default-features = false, features = [
     "compat-1-0",
     "libm",
     "unsafe-single-threaded",
 ] }
 tinygif = "0.0.3"
+nalgebra = { version = "0.34.2", default-features = false, features = [ "libm" ] }
+libm = "0.2.16"
 
 
 [build-dependencies]

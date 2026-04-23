@@ -49,7 +49,7 @@ fn init_heap() {
     }
 }
 
-#[hal::entry]
+#[hal::main]
 fn main() -> ! {
 
     // Disable the RTC and TIMG watchdog timers
@@ -80,11 +80,11 @@ fn main() -> ! {
         75_u32.MHz(), // max 75MHz
         hal::spi::SpiMode::Mode0,
         &clocks)
-        .with_pins(Some(sclk),Some(d0),Some(d1),Some(d2),Some(d3),NO_PIN)
+        .with_pins(Some(sclk),Some(d0),Some(d1),Some(d2),Some(d3),NO_PIN);
 
     
     display
-        .set_orientation(Orientation::LandscapeFlipped)
+        .set_orientation(Orientation::LandscapeFlipped);
 
 
     Text::with_alignment(
@@ -93,7 +93,7 @@ fn main() -> ! {
         character_style,
         Alignment::Center,
     )
-    .draw(&mut display)
+    .draw(&mut display);
 
     let mut cnt = 0;
 

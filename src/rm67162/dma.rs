@@ -27,23 +27,27 @@ static mut DMA_DESCRIPTORS: [hal::dma::DmaDescriptor; 4] = [hal::dma::DmaDescrip
 pub type SpiType<'d> =
     SpiDma<'d, Blocking>;
 
-pub struct RM67162Dma<'a, CS> {
+pub struct RM67162Dma<'a, CS, DC> {
     spi: Option<SpiType<'a>>,
     cs: CS,
+    dc: DC,
     orientation: Orientation,
 }
 
-impl<CS> RM67162Dma<'_, CS>
+impl<CS, DC> RM67162Dma<'_, CS, DC>
 where
     CS: OutputPin,
+    DC: OutputPin,
 {
     pub fn new<'a>(
         spi: SpiType<'a>,
         cs: CS,
-    ) -> RM67162Dma<'a, CS> {
+        dc: DC,
+    ) -> RM67162Dma<'a, CS, DC> {
         RM67162Dma {
             spi: Some(spi),
             cs,
+            dc,
             orientation: Orientation::Portrait,
         }
     }
@@ -64,35 +68,54 @@ where
     }
 
     fn send_cmd(&mut self, cmd: u32, data: &[u8]) -> Result<(), ()> {
-        let txbuf = StaticReadBuffer::new(data.as_ptr(), data.len());
         self.cs.set_low().unwrap();
+        self.dc.set_low().unwrap();
 
         let mut spi = self.spi.take().unwrap();
-        let tx = spi
-            .half_duplex_write(
+        
+        // Write command
+        let cmd_buf = [cmd as u8];
+        let txbuf_cmd = StaticReadBuffer::new(cmd_buf.as_ptr(), 1);
+        let tx_cmd = spi.half_duplex_write(
+            DataMode::Single,
+            Command::None,
+            Address::None,
+            0,
+            1,
+            txbuf_cmd,
+        ).unwrap();
+        let (spi_back_cmd, _) = tx_cmd.wait();
+        spi = spi_back_cmd;
+
+        self.dc.set_high().unwrap();
+
+        // Write data
+        if !data.is_empty() {
+            let txbuf_data = StaticReadBuffer::new(data.as_ptr(), data.len());
+            let tx_data = spi.half_duplex_write(
                 DataMode::Single,
-                Command::_8Bit(0x02, DataMode::Single),
-                Address::_24Bit(cmd << 8, DataMode::Single),
+                Command::None,
+                Address::None,
                 0,
                 data.len(),
-                txbuf,
-            )
-            .unwrap();
-        let (spi_back, _) = tx.wait();
-        spi = spi_back;
-        self.spi.replace(spi);
+                txbuf_data,
+            ).unwrap();
+            let (spi_back_data, _) = tx_data.wait();
+            spi = spi_back_data;
+        }
 
+        self.spi.replace(spi);
         self.cs.set_high().unwrap();
         Ok(())
     }
 
-    // rm67162_qspi_init
     pub fn init(&mut self, delay: &mut impl embedded_hal_1::delay::DelayNs) -> Result<(), ()> {
         for _ in 0..3 {
+            self.send_cmd(0xFE, &[0x00])?;
             self.send_cmd(0x11, &[])?; // sleep out
             delay.delay_ms(120);
 
-            self.send_cmd(0x3A, &[0x55])?; // 16bit mode
+            self.send_cmd(0x3A, &[0x75])?; // 16bit mode
 
             self.send_cmd(0x51, &[0x00])?; // write brightness
 
@@ -132,17 +155,35 @@ where
     fn draw_point(&mut self, x: u16, y: u16, color: Rgb565) -> Result<(), ()> {
         self.set_address(x, y, x, y)?;
 
+        self.cs.set_low().unwrap();
+        self.dc.set_low().unwrap();
+
+        let mut spi = self.spi.take().unwrap();
+        
+        // Write command
+        let cmd_buf = [0x2C];
+        let txbuf_cmd = StaticReadBuffer::new(cmd_buf.as_ptr(), 1);
+        let tx_cmd = spi.half_duplex_write(
+            DataMode::Single,
+            Command::None,
+            Address::None,
+            0,
+            1,
+            txbuf_cmd,
+        ).unwrap();
+        let (spi_back_cmd, _) = tx_cmd.wait();
+        spi = spi_back_cmd;
+
+        self.dc.set_high().unwrap();
+
         let raw = color.to_be_bytes();
         let txbuf = StaticReadBuffer::new(raw.as_ptr(), 2);
 
-        self.cs.set_low().unwrap();
-
-        let mut spi = self.spi.take().unwrap();
         let tx = spi
             .half_duplex_write(
-                DataMode::Quad,
-                Command::_8Bit(0x32, DataMode::Single),
-                Address::_24Bit(0x2C << 8, DataMode::Single),
+                DataMode::Single,
+                Command::None,
+                Address::None,
                 0,
                 2,
                 txbuf,
@@ -150,31 +191,39 @@ where
             .unwrap();
         let (spi_back, _) = tx.wait();
         spi = spi_back;
-        self.spi.replace(spi);
 
+        self.spi.replace(spi);
         self.cs.set_high().unwrap();
         Ok(())
     }
 
     #[inline]
     fn dma_send_colors(&mut self, txbuf: StaticReadBuffer, first_send: bool) -> Result<(), ()> {
+        if first_send {
+            self.dc.set_low().unwrap();
+            let mut spi = self.spi.take().unwrap();
+            let cmd_buf = [0x2C];
+            let txbuf_cmd = StaticReadBuffer::new(cmd_buf.as_ptr(), 1);
+            let tx_cmd = spi.half_duplex_write(
+                DataMode::Single,
+                Command::None,
+                Address::None,
+                0,
+                1,
+                txbuf_cmd,
+            ).unwrap();
+            let (spi_back_cmd, _) = tx_cmd.wait();
+            spi = spi_back_cmd;
+            self.spi.replace(spi);
+            self.dc.set_high().unwrap();
+        }
+
         let mut spi = self.spi.take().unwrap();
         let len = txbuf.len;
 
-        let tx = if first_send {
-            spi.half_duplex_write(
-                DataMode::Quad,
-                Command::_8Bit(0x32, DataMode::Single),
-                Address::_24Bit(0x2C << 8, DataMode::Single),
-                0,
-                len,
-                txbuf,
-            )
-            .unwrap()
-        } else {
-            spi.half_duplex_write(DataMode::Quad, Command::None, Address::None, 0, len, txbuf)
-                .unwrap()
-        };
+        let tx = spi.half_duplex_write(DataMode::Single, Command::None, Address::None, 0, len, txbuf)
+                .unwrap();
+
         let (spi_back, _) = tx.wait();
         spi = spi_back;
         self.spi.replace(spi);
@@ -272,9 +321,10 @@ where
     }
 }
 
-impl<CS> OriginDimensions for RM67162Dma<'_, CS>
+impl<CS, DC> OriginDimensions for RM67162Dma<'_, CS, DC>
 where
     CS: OutputPin,
+    DC: OutputPin,
 {
     fn size(&self) -> Size {
         if matches!(
@@ -288,9 +338,10 @@ where
     }
 }
 
-impl<CS> DrawTarget for RM67162Dma<'_, CS>
+impl<CS, DC> DrawTarget for RM67162Dma<'_, CS, DC>
 where
     CS: OutputPin,
+    DC: OutputPin,
 {
     type Color = Rgb565;
 
