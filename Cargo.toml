@@ -43,10 +43,10 @@ slint = { version = "1.0.2", default-features = false, features = [
     "unsafe-single-threaded",
 ] }
 tinygif = "0.0.3"
-nalgebra = { version = "0.34.2", default-features = false, features = [ "libm" ] }
 libm = "0.2.16"
 
 bevy = { version = "0.18.1", default-features = false }
+bevy_platform = { version = "0.18.1", default-features = false }
 
 
 [build-dependencies]
