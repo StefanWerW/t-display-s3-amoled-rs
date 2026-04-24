@@ -13,18 +13,18 @@ use embedded_graphics::prelude::*;
 use embedded_graphics::text::{Alignment, Text};
 use esp_backtrace as _;
 use esp_println::println;
-use hal::dma::DmaPriority;
-use hal::gdma::Gdma;
-use hal::gpio::NO_PIN;
-use hal::prelude::_fugit_RateExtU32;
-use hal::spi::master::prelude::*;
-use hal::spi::master::Spi;
-use hal::systimer::SystemTimer;
+
 use hal::{
-    clock::ClockControl, peripherals::Peripherals, prelude::*, timer::TimerGroup, Delay, Rtc, IO,
+    delay::Delay,
+    gpio::{Level, Output, OutputConfig},
+    spi::master::{Config as SpiConfig, Spi},
+    spi::Mode,
+    time::Rate,
 };
-use t_display_s3_amoled::rm67162::Orientation;
+
 #[global_allocator]
+static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
+
 #[unsafe(export_name = "esp_app_desc")]
 #[unsafe(link_section = ".rodata_desc")]
 #[used]
@@ -43,52 +43,82 @@ pub static ESP_APP_DESC: esp_bootloader_esp_idf::EspAppDesc =
 
 fn init_heap() {
     const HEAP_SIZE: usize = 32 * 1024;
+    static mut HEAP: MaybeUninit<[u8; HEAP_SIZE]> = MaybeUninit::uninit();
 
-    unsafe {}
+    unsafe {
+        ALLOCATOR.init(HEAP.as_mut_ptr() as *mut u8, HEAP_SIZE);
+    }
 }
 
 #[hal::main]
 fn main() -> ! {
-    // Disable the RTC and TIMG watchdog timers
+    init_heap();
+    let peripherals = hal::init(hal::Config::default());
+    println!("Hello world!");
 
-    // Set GPIO4 as an output, and set its state high initially.
+    let mut delay = Delay::new();
 
-    let sclk = io.pins.gpio47;
-    let rst = io.pins.gpio17;
-    let cs = io.pins.gpio6;
+    let _led = Output::new(peripherals.GPIO38, Level::High, OutputConfig::default());
+    println!("GPIO init OK");
 
-    let d0 = io.pins.gpio18;
-    let d1 = io.pins.gpio7;
-    let d2 = io.pins.gpio48;
-    let d3 = io.pins.gpio5;
+    let sclk = peripherals.GPIO47;
+    let mut rst = Output::new(peripherals.GPIO17, Level::High, OutputConfig::default());
+    let cs = Output::new(peripherals.GPIO6, Level::High, OutputConfig::default());
 
-    let dma_channel = dma.channel0;
+    let d0 = peripherals.GPIO18; // MOSI
+    let d1 = peripherals.GPIO7; // DC
 
-    // Descriptors should be sized as (BUFFERSIZE / 4092) * 3
-    let mut descriptors = [0u32; 12];
-    let spi = Spi::new_half_duplex(
-        peripherals.SPI2, // use spi2 host
-        75_u32.MHz(),     // max 75MHz
-        hal::spi::SpiMode::Mode0,
-        &clocks,
+    let dc = Output::new(d1, Level::High, OutputConfig::default());
+
+    let dma_channel = peripherals.DMA_CH0;
+
+    let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) = hal::dma_buffers!(32000, 32000);
+    let dma_rx_buf = hal::dma::DmaRxBuf::new(rx_descriptors, rx_buffer).unwrap();
+    let dma_tx_buf = hal::dma::DmaTxBuf::new(tx_descriptors, tx_buffer).unwrap();
+
+    let spi = Spi::new(
+        peripherals.SPI2,
+        SpiConfig::default()
+            .with_frequency(Rate::from_mhz(75))
+            .with_mode(Mode::_0),
     )
-    .with_pins(Some(sclk), Some(d0), Some(d1), Some(d2), Some(d3), NO_PIN);
+    .unwrap()
+    .with_sck(sclk)
+    .with_mosi(d0)
+    .with_dma(dma_channel)
+    .with_buffers(dma_rx_buf, dma_tx_buf);
 
-    display.set_orientation(Orientation::LandscapeFlipped);
+    let mut display = t_display_s3_amoled::rm67162::dma::RM67162Dma::new(spi, cs, dc);
+    display.reset(&mut rst, &mut delay).unwrap();
+    println!("reset display");
+    display.init(&mut delay).unwrap();
+    display
+        .set_orientation(t_display_s3_amoled::rm67162::Orientation::LandscapeFlipped)
+        .unwrap();
 
+    println!("init display");
+
+    display.clear(Rgb565::WHITE).unwrap();
+    println!("screen init ok");
+
+    let character_style = MonoTextStyle::new(&FONT_10X20, Rgb565::RED);
     Text::with_alignment(
         "Hello,\nRust World!",
         Point::new(300, 20),
         character_style,
         Alignment::Center,
     )
-    .draw(&mut display);
+    .draw(&mut display)
+    .unwrap();
 
     let mut cnt = 0;
+    let started = hal::time::Instant::now().duration_since_epoch().as_millis();
 
     loop {
         // fps testing
-        let elapsed = now_ms() - started;
+        let mut s = String::new();
+
+        let elapsed = hal::time::Instant::now().duration_since_epoch().as_millis() - started;
         core::write!(
             &mut s,
             "Frames: {}\nFPS: {:.1}",
@@ -98,7 +128,8 @@ fn main() -> ! {
             } else {
                 0.0
             }
-        );
+        )
+        .unwrap();
         Text::with_alignment(
             &s,
             Point::new(100, 40),
@@ -109,11 +140,8 @@ fn main() -> ! {
                 .build(),
             Alignment::Center,
         )
-        .draw(&mut display);
+        .draw(&mut display)
+        .unwrap();
         cnt += 1;
     }
-}
-
-fn now_ms() -> u64 {
-    hal::time::Instant::now().duration_since_epoch().as_micros() * 1_000 / 1_000_000
 }

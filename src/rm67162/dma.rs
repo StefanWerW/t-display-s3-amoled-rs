@@ -11,7 +11,7 @@ use embedded_graphics::{
 use embedded_hal_1::{delay::DelayNs, digital::OutputPin};
 
 use hal::{
-    spi::master::{SpiDma, Command, Address, DataMode},
+    spi::master::{SpiDmaBus, Command, Address, DataMode},
     Blocking,
 };
 
@@ -25,7 +25,7 @@ static mut DMA_BUFFER: [u8; BUFFER_SIZE] = [0u8; BUFFER_SIZE];
 static mut DMA_DESCRIPTORS: [hal::dma::DmaDescriptor; 4] = [hal::dma::DmaDescriptor::EMPTY; 4];
 
 pub type SpiType<'d> =
-    SpiDma<'d, Blocking>;
+    SpiDmaBus<'d, Blocking>;
 
 pub struct RM67162Dma<'a, CS, DC> {
     spi: Option<SpiType<'a>>,
@@ -75,33 +75,25 @@ where
         
         // Write command
         let cmd_buf = [cmd as u8];
-        let txbuf_cmd = StaticReadBuffer::new(cmd_buf.as_ptr(), 1);
-        let tx_cmd = spi.half_duplex_write(
+        spi.half_duplex_write(
             DataMode::Single,
             Command::None,
             Address::None,
             0,
-            1,
-            txbuf_cmd,
+            &cmd_buf,
         ).unwrap();
-        let (spi_back_cmd, _) = tx_cmd.wait();
-        spi = spi_back_cmd;
 
         self.dc.set_high().unwrap();
 
         // Write data
         if !data.is_empty() {
-            let txbuf_data = StaticReadBuffer::new(data.as_ptr(), data.len());
-            let tx_data = spi.half_duplex_write(
+            spi.half_duplex_write(
                 DataMode::Single,
                 Command::None,
                 Address::None,
                 0,
-                data.len(),
-                txbuf_data,
+                data,
             ).unwrap();
-            let (spi_back_data, _) = tx_data.wait();
-            spi = spi_back_data;
         }
 
         self.spi.replace(spi);
@@ -162,35 +154,24 @@ where
         
         // Write command
         let cmd_buf = [0x2C];
-        let txbuf_cmd = StaticReadBuffer::new(cmd_buf.as_ptr(), 1);
-        let tx_cmd = spi.half_duplex_write(
+        spi.half_duplex_write(
             DataMode::Single,
             Command::None,
             Address::None,
             0,
-            1,
-            txbuf_cmd,
+            &cmd_buf,
         ).unwrap();
-        let (spi_back_cmd, _) = tx_cmd.wait();
-        spi = spi_back_cmd;
 
         self.dc.set_high().unwrap();
 
         let raw = color.to_be_bytes();
-        let txbuf = StaticReadBuffer::new(raw.as_ptr(), 2);
-
-        let tx = spi
-            .half_duplex_write(
-                DataMode::Single,
-                Command::None,
-                Address::None,
-                0,
-                2,
-                txbuf,
-            )
-            .unwrap();
-        let (spi_back, _) = tx.wait();
-        spi = spi_back;
+        spi.half_duplex_write(
+            DataMode::Single,
+            Command::None,
+            Address::None,
+            0,
+            &raw,
+        ).unwrap();
 
         self.spi.replace(spi);
         self.cs.set_high().unwrap();
@@ -198,34 +179,26 @@ where
     }
 
     #[inline]
-    fn dma_send_colors(&mut self, txbuf: StaticReadBuffer, first_send: bool) -> Result<(), ()> {
+    fn dma_send_colors(&mut self, txbuf: &[u8], first_send: bool) -> Result<(), ()> {
         if first_send {
             self.dc.set_low().unwrap();
             let mut spi = self.spi.take().unwrap();
             let cmd_buf = [0x2C];
-            let txbuf_cmd = StaticReadBuffer::new(cmd_buf.as_ptr(), 1);
-            let tx_cmd = spi.half_duplex_write(
+            spi.half_duplex_write(
                 DataMode::Single,
                 Command::None,
                 Address::None,
                 0,
-                1,
-                txbuf_cmd,
+                &cmd_buf,
             ).unwrap();
-            let (spi_back_cmd, _) = tx_cmd.wait();
-            spi = spi_back_cmd;
             self.spi.replace(spi);
             self.dc.set_high().unwrap();
         }
 
         let mut spi = self.spi.take().unwrap();
-        let len = txbuf.len;
-
-        let tx = spi.half_duplex_write(DataMode::Single, Command::None, Address::None, 0, len, txbuf)
+        spi.half_duplex_write(DataMode::Single, Command::None, Address::None, 0, txbuf)
                 .unwrap();
 
-        let (spi_back, _) = tx.wait();
-        spi = spi_back;
         self.spi.replace(spi);
         Ok(())
     }
@@ -242,8 +215,7 @@ where
         self.set_address(x, y, x + w - 1, y + h - 1)?;
 
         self.cs.set_low().unwrap();
-        let txbuf = StaticReadBuffer::new(raw_colors.as_ptr(), raw_colors.len());
-        self.dma_send_colors(txbuf, true)?;
+        self.dma_send_colors(raw_colors, true)?;
         self.cs.set_high().unwrap();
         Ok(())
     }
@@ -269,8 +241,7 @@ where
         self.cs.set_low().unwrap();
 
         for chunk in raw_framebuffer.chunks(BUFFER_SIZE) {
-            let txbuf = StaticReadBuffer::new(chunk.as_ptr(), chunk.len());
-            self.dma_send_colors(txbuf, first_send)?;
+            self.dma_send_colors(chunk, first_send)?;
             first_send = false;
         }
 
@@ -295,9 +266,7 @@ where
 
         for color in colors.into_iter().take(w as usize * h as usize) {
             if i == BUFFER_PIXELS {
-                let txbuf = StaticReadBuffer::new(unsafe { DMA_BUFFER.as_ptr() }, BUFFER_SIZE);
-
-                self.dma_send_colors(txbuf, first_send)?;
+                self.dma_send_colors(unsafe { &DMA_BUFFER }, first_send)?;
                 first_send = false;
                 i = 0;
             }
@@ -307,10 +276,8 @@ where
             i += 1;
         }
         if i > 0 {
-            let txbuf = StaticReadBuffer::new(unsafe { DMA_BUFFER.as_ptr() }, 2 * i);
-            self.dma_send_colors(txbuf, first_send)?;
+            self.dma_send_colors(unsafe { &DMA_BUFFER[..2 * i] }, first_send)?;
         }
-
         self.cs.set_high().unwrap();
         Ok(())
     }
@@ -387,75 +354,3 @@ where
     }
 }
 
-#[derive(Copy, Clone, Debug)]
-pub struct StaticReadBuffer {
-    buffer: *const u8,
-    len: usize,
-}
-
-impl StaticReadBuffer {
-    pub fn new(buffer: *const u8, len: usize) -> StaticReadBuffer {
-        StaticReadBuffer { buffer, len }
-    }
-}
-
-unsafe impl hal::dma::DmaTxBuffer for StaticReadBuffer {
-    type View = Self;
-    type Final = Self;
-
-    fn prepare(&mut self) -> hal::dma::Preparation {
-        let len = self.len;
-        let mut ptr = self.buffer as *mut u8;
-        
-        let mut remaining = len;
-        let mut i = 0;
-        unsafe {
-            if len == 0 {
-                DMA_DESCRIPTORS[0] = hal::dma::DmaDescriptor::EMPTY;
-                DMA_DESCRIPTORS[0].set_length(0);
-                DMA_DESCRIPTORS[0].set_size(0);
-                DMA_DESCRIPTORS[0].set_owner(hal::dma::Owner::Dma);
-                DMA_DESCRIPTORS[0].set_suc_eof(true);
-                DMA_DESCRIPTORS[0].buffer = core::ptr::null_mut();
-            } else {
-                while remaining > 0 {
-                    let chunk_len = core::cmp::min(remaining, 4092);
-                    DMA_DESCRIPTORS[i] = hal::dma::DmaDescriptor::EMPTY;
-                    DMA_DESCRIPTORS[i].set_length(chunk_len);
-                    DMA_DESCRIPTORS[i].set_size(chunk_len);
-                    DMA_DESCRIPTORS[i].buffer = ptr;
-                    DMA_DESCRIPTORS[i].set_owner(hal::dma::Owner::Dma);
-                    
-                    remaining -= chunk_len;
-                    ptr = ptr.add(chunk_len);
-                    
-                    if remaining > 0 {
-                        DMA_DESCRIPTORS[i].next = DMA_DESCRIPTORS.as_mut_ptr().add(i + 1);
-                        DMA_DESCRIPTORS[i].set_suc_eof(false);
-                    } else {
-                        DMA_DESCRIPTORS[i].next = core::ptr::null_mut();
-                        DMA_DESCRIPTORS[i].set_suc_eof(true);
-                    }
-                    i += 1;
-                }
-            }
-        }
-        
-        hal::dma::Preparation {
-            start: unsafe { DMA_DESCRIPTORS.as_mut_ptr() },
-            direction: hal::dma::TransferDirection::Out,
-            accesses_psram: false,
-            burst_transfer: hal::dma::BurstConfig::default(),
-            check_owner: Some(true),
-            auto_write_back: false,
-        }
-    }
-
-    fn into_view(self) -> Self::View {
-        self
-    }
-
-    fn from_view(view: Self::View) -> Self::Final {
-        view
-    }
-}
