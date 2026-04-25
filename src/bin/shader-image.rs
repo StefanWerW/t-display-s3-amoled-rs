@@ -12,7 +12,7 @@ use embedded_graphics::text::{Alignment, Text};
 use esp_backtrace as _;
 use esp_println::println;
 
-use hal::{
+use esp_hal::{
     delay::Delay,
     gpio::{Io, Level, Output, OutputConfig},
     spi::master::{Config as SpiConfig, Spi},
@@ -20,33 +20,7 @@ use hal::{
     time::Rate,
 };
 
-#[global_allocator]
-static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
-
-#[unsafe(export_name = "esp_app_desc")]
-#[unsafe(link_section = ".rodata_desc")]
-#[used]
-pub static ESP_APP_DESC: esp_bootloader_esp_idf::EspAppDesc =
-    esp_bootloader_esp_idf::EspAppDesc::new_internal(
-        env!("CARGO_PKG_VERSION"),
-        env!("CARGO_PKG_NAME"),
-        "00:00:00",
-        "2026-04-23",
-        "esp-hal",
-        0,
-        u16::MAX,
-        65536,
-        0,
-    );
-
-fn init_heap() {
-    const HEAP_SIZE: usize = 32 * 1024;
-    static mut HEAP: MaybeUninit<[u8; HEAP_SIZE]> = MaybeUninit::uninit();
-
-    unsafe {
-        ALLOCATOR.init(HEAP.as_mut_ptr() as *mut u8, HEAP_SIZE);
-    }
-}
+esp_bootloader_esp_idf::esp_app_desc!();
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vector2 {
@@ -317,10 +291,12 @@ impl core::ops::Div<Vector4> for Vector4 {
     }
 }
 
-#[hal::main]
+#[esp_hal::main]
 fn main() -> ! {
-    init_heap();
-    let peripherals = hal::init(hal::Config::default());
+    let peripherals = esp_hal::init(esp_hal::Config::default());
+
+    esp_alloc::psram_allocator!(peripherals.PSRAM, esp_hal::psram);
+
     println!("Hello world!");
 
     let mut delay = Delay::new();

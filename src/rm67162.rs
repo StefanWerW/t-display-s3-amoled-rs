@@ -6,9 +6,9 @@ use embedded_graphics::{
     primitives::Rectangle,
     Pixel,
 };
-use embedded_hal_1::{delay::DelayNs, digital::OutputPin};
-use hal::{
-    spi::master::{Spi, Command, Address, DataMode},
+use embedded_hal::{delay::DelayNs, digital::OutputPin};
+use esp_hal::{
+    spi::master::{Address, Command, DataMode, Spi},
     Blocking,
 };
 
@@ -84,13 +84,7 @@ where
         self.dc.set_high().unwrap();
         if !data.is_empty() {
             self.spi
-                .half_duplex_write(
-                    DataMode::Single,
-                    Command::None,
-                    Address::None,
-                    0,
-                    data,
-                )
+                .half_duplex_write(DataMode::Single, Command::None, Address::None, 0, data)
                 .unwrap();
         }
         self.cs.set_high().unwrap();
@@ -98,7 +92,7 @@ where
     }
 
     // rm67162_qspi_init
-    pub fn init(&mut self, delay: &mut impl embedded_hal_1::delay::DelayNs) -> Result<(), ()> {
+    pub fn init(&mut self, delay: &mut impl embedded_hal::delay::DelayNs) -> Result<(), ()> {
         for _ in 0..3 {
             self.send_cmd(0xFE, &[0x00])?;
             self.send_cmd(0x11, &[])?; // sleep out
@@ -146,13 +140,7 @@ where
         self.cs.set_low().unwrap();
         self.dc.set_low().unwrap();
         self.spi
-            .half_duplex_write(
-                DataMode::Single,
-                Command::None,
-                Address::None,
-                0,
-                &[0x2C],
-            )
+            .half_duplex_write(DataMode::Single, Command::None, Address::None, 0, &[0x2C])
             .unwrap();
         self.dc.set_high().unwrap();
         self.spi
@@ -180,13 +168,7 @@ where
         self.cs.set_low().unwrap();
         self.dc.set_low().unwrap();
         self.spi
-            .half_duplex_write(
-                DataMode::Single,
-                Command::None,
-                Address::None,
-                0,
-                &[0x2C],
-            )
+            .half_duplex_write(DataMode::Single, Command::None, Address::None, 0, &[0x2C])
             .unwrap();
         self.dc.set_high().unwrap();
 
@@ -211,13 +193,7 @@ where
         self.cs.set_low().unwrap();
         self.dc.set_low().unwrap();
         self.spi
-            .half_duplex_write(
-                DataMode::Single,
-                Command::None,
-                Address::None,
-                0,
-                &[0x2C],
-            )
+            .half_duplex_write(DataMode::Single, Command::None, Address::None, 0, &[0x2C])
             .unwrap();
         self.dc.set_high().unwrap();
 

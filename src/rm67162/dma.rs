@@ -8,10 +8,10 @@ use embedded_graphics::{
     primitives::Rectangle,
     Pixel,
 };
-use embedded_hal_1::{delay::DelayNs, digital::OutputPin};
+use embedded_hal::{delay::DelayNs, digital::OutputPin};
 
-use hal::{
-    spi::master::{SpiDmaBus, Command, Address, DataMode},
+use esp_hal::{
+    spi::master::{Address, Command, DataMode, SpiDmaBus},
     Blocking,
 };
 
@@ -22,10 +22,10 @@ pub const SCREEN_SIZE: Size = Size::new(240, 536);
 const BUFFER_PIXELS: usize = 16368 / 2;
 const BUFFER_SIZE: usize = BUFFER_PIXELS * 2;
 static mut DMA_BUFFER: [u8; BUFFER_SIZE] = [0u8; BUFFER_SIZE];
-static mut DMA_DESCRIPTORS: [hal::dma::DmaDescriptor; 4] = [hal::dma::DmaDescriptor::EMPTY; 4];
+static mut DMA_DESCRIPTORS: [esp_hal::dma::DmaDescriptor; 4] =
+    [esp_hal::dma::DmaDescriptor::EMPTY; 4];
 
-pub type SpiType<'d> =
-    SpiDmaBus<'d, Blocking>;
+pub type SpiType<'d> = SpiDmaBus<'d, Blocking>;
 
 pub struct RM67162Dma<'a, CS, DC> {
     spi: Option<SpiType<'a>>,
@@ -39,11 +39,7 @@ where
     CS: OutputPin,
     DC: OutputPin,
 {
-    pub fn new<'a>(
-        spi: SpiType<'a>,
-        cs: CS,
-        dc: DC,
-    ) -> RM67162Dma<'a, CS, DC> {
+    pub fn new<'a>(spi: SpiType<'a>, cs: CS, dc: DC) -> RM67162Dma<'a, CS, DC> {
         RM67162Dma {
             spi: Some(spi),
             cs,
@@ -72,28 +68,18 @@ where
         self.dc.set_low().unwrap();
 
         let mut spi = self.spi.take().unwrap();
-        
+
         // Write command
         let cmd_buf = [cmd as u8];
-        spi.half_duplex_write(
-            DataMode::Single,
-            Command::None,
-            Address::None,
-            0,
-            &cmd_buf,
-        ).unwrap();
+        spi.half_duplex_write(DataMode::Single, Command::None, Address::None, 0, &cmd_buf)
+            .unwrap();
 
         self.dc.set_high().unwrap();
 
         // Write data
         if !data.is_empty() {
-            spi.half_duplex_write(
-                DataMode::Single,
-                Command::None,
-                Address::None,
-                0,
-                data,
-            ).unwrap();
+            spi.half_duplex_write(DataMode::Single, Command::None, Address::None, 0, data)
+                .unwrap();
         }
 
         self.spi.replace(spi);
@@ -101,7 +87,7 @@ where
         Ok(())
     }
 
-    pub fn init(&mut self, delay: &mut impl embedded_hal_1::delay::DelayNs) -> Result<(), ()> {
+    pub fn init(&mut self, delay: &mut impl embedded_hal::delay::DelayNs) -> Result<(), ()> {
         for _ in 0..3 {
             self.send_cmd(0xFE, &[0x00])?;
             self.send_cmd(0x11, &[])?; // sleep out
@@ -151,27 +137,17 @@ where
         self.dc.set_low().unwrap();
 
         let mut spi = self.spi.take().unwrap();
-        
+
         // Write command
         let cmd_buf = [0x2C];
-        spi.half_duplex_write(
-            DataMode::Single,
-            Command::None,
-            Address::None,
-            0,
-            &cmd_buf,
-        ).unwrap();
+        spi.half_duplex_write(DataMode::Single, Command::None, Address::None, 0, &cmd_buf)
+            .unwrap();
 
         self.dc.set_high().unwrap();
 
         let raw = color.to_be_bytes();
-        spi.half_duplex_write(
-            DataMode::Single,
-            Command::None,
-            Address::None,
-            0,
-            &raw,
-        ).unwrap();
+        spi.half_duplex_write(DataMode::Single, Command::None, Address::None, 0, &raw)
+            .unwrap();
 
         self.spi.replace(spi);
         self.cs.set_high().unwrap();
@@ -184,20 +160,15 @@ where
             self.dc.set_low().unwrap();
             let mut spi = self.spi.take().unwrap();
             let cmd_buf = [0x2C];
-            spi.half_duplex_write(
-                DataMode::Single,
-                Command::None,
-                Address::None,
-                0,
-                &cmd_buf,
-            ).unwrap();
+            spi.half_duplex_write(DataMode::Single, Command::None, Address::None, 0, &cmd_buf)
+                .unwrap();
             self.spi.replace(spi);
             self.dc.set_high().unwrap();
         }
 
         let mut spi = self.spi.take().unwrap();
         spi.half_duplex_write(DataMode::Single, Command::None, Address::None, 0, txbuf)
-                .unwrap();
+            .unwrap();
 
         self.spi.replace(spi);
         Ok(())
@@ -353,4 +324,3 @@ where
         Ok(())
     }
 }
-

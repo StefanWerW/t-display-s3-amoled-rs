@@ -20,11 +20,13 @@ use embedded_graphics::primitives::{
     Circle, PrimitiveStyle, Rectangle, StyledDimensions, StyledDrawable,
 };
 use embedded_graphics::text::{Alignment, Text};
+use embedded_graphics_framebuf::FrameBuf;
 use esp_backtrace as _;
 use esp_println::println;
+use t_display_s3_amoled::heapbuffer::HeapBuffer;
 use t_display_s3_amoled::rm67162::dma::RM67162Dma;
 
-use hal::{
+use esp_hal::{
     delay::Delay,
     gpio::{Level, Output, OutputConfig},
     spi::master::{Config as SpiConfig, Spi},
@@ -37,33 +39,19 @@ fn elapsed_time() -> core::time::Duration {
     core::time::Duration::from_millis(ELAPSED.load(Ordering::Relaxed) as u64)
 }
 
-#[global_allocator]
-static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
+// #[global_allocator]
+// static ALLOCATOR: esp_alloc::EspHeap = esp_alloc::EspHeap::empty();
 
-#[unsafe(export_name = "esp_app_desc")]
-#[unsafe(link_section = ".rodata_desc")]
-#[used]
-pub static ESP_APP_DESC: esp_bootloader_esp_idf::EspAppDesc =
-    esp_bootloader_esp_idf::EspAppDesc::new_internal(
-        env!("CARGO_PKG_VERSION"),
-        env!("CARGO_PKG_NAME"),
-        "00:00:00",
-        "2026-04-23",
-        "esp-hal",
-        0,
-        u16::MAX,
-        65536,
-        0,
-    );
+esp_bootloader_esp_idf::esp_app_desc!();
 
-fn init_heap() {
-    const HEAP_SIZE: usize = 5 * 32 * 1024;
-    static mut HEAP: MaybeUninit<[u8; HEAP_SIZE]> = MaybeUninit::uninit();
+// fn init_heap() {
+//     const HEAP_SIZE: usize = 6 * 32 * 1024;
+//     static mut HEAP: MaybeUninit<[u8; HEAP_SIZE]> = MaybeUninit::uninit();
 
-    unsafe {
-        ALLOCATOR.init(HEAP.as_mut_ptr() as *mut u8, HEAP_SIZE);
-    }
-}
+//     unsafe {
+//         ALLOCATOR.init(HEAP.as_mut_ptr() as *mut u8, HEAP_SIZE);
+//     }
+// }
 
 type MyDisplay = RM67162Dma<'static, Output<'static>, Output<'static>>;
 
@@ -71,25 +59,32 @@ struct DisplayResource {
     display: MyDisplay,
 }
 
-const LCD_H_RES: usize = 130;
+const LCD_H_RES: usize = 536;
 const LCD_V_RES: usize = 240;
 const LCD_BUFFER_SIZE: usize = LCD_H_RES * LCD_V_RES;
 
-type MyFrameBuffer = Framebuffer<
-    Rgb565,
-    RawU16,
-    LittleEndian,
-    LCD_H_RES,
-    LCD_V_RES,
-    { buffer_size::<Rgb565>(LCD_H_RES, LCD_V_RES) },
->;
+type FbBuffer = HeapBuffer<Rgb565, LCD_BUFFER_SIZE>;
+type MyFrameBuf = FrameBuf<Rgb565, FbBuffer>;
 
-struct FramebufferResource {
-    fb: MyFrameBuffer,
+#[derive(Resource)]
+struct FrameBufferResource {
+    frame_buf: MyFrameBuf,
+}
+
+impl FrameBufferResource {
+    fn new() -> Self {
+        let fb_data: Box<[Rgb565; LCD_BUFFER_SIZE]> = Box::new([Rgb565::BLACK; LCD_BUFFER_SIZE]);
+        let heap_buffer = HeapBuffer::new(fb_data);
+        let frame_buf = MyFrameBuf::new(heap_buffer, LCD_H_RES, LCD_V_RES);
+        Self { frame_buf }
+    }
 }
 
 #[derive(Component)]
-struct Ball;
+struct Ball {
+    radius: u32,
+    color: Rgb565,
+}
 
 #[derive(Component)]
 struct Velocity {
@@ -97,57 +92,121 @@ struct Velocity {
     y: f32,
 }
 
-fn ball_movement(mut query: Query<(&mut Transform, &Velocity)>) {
-    for (mut transform, velocity) in query.iter_mut() {
+const EPSILON: f32 = 0.1;
+
+fn ball_movement(mut query: Query<(&mut Transform, &mut Velocity, &Ball)>) {
+    for (mut transform, mut velocity, ball) in query.iter_mut() {
         transform.translation.x += velocity.x;
         transform.translation.y += velocity.y;
+
+        if transform.translation.x > LCD_H_RES as f32 - ball.radius as f32 {
+            velocity.x = -velocity.x;
+            transform.translation.x = LCD_H_RES as f32 - ball.radius as f32 - EPSILON;
+        }
+        if transform.translation.x < ball.radius as f32 {
+            velocity.x = -velocity.x;
+            transform.translation.x = ball.radius as f32 + EPSILON;
+        }
+        if transform.translation.y > LCD_V_RES as f32 - ball.radius as f32 {
+            velocity.y = -velocity.y;
+            transform.translation.y = LCD_V_RES as f32 - ball.radius as f32 - EPSILON;
+        }
+        if transform.translation.y < ball.radius as f32 {
+            velocity.y = -velocity.y;
+            transform.translation.y = ball.radius as f32 + EPSILON;
+        }
     }
 }
 
 fn render_system(
-    mut display: NonSendMut<DisplayResource>,
-    mut fb_res: NonSendMut<FramebufferResource>,
-    mut query: Query<(&Transform, Entity)>,
+    mut display_res: NonSendMut<DisplayResource>,
+    mut fb_res: ResMut<FrameBufferResource>,
+    mut query: Query<(&Transform, &Ball)>,
 ) {
-    println!("render_system");
+    // println!("render_system");
 
-    fb_res.fb.clear(Rgb565::BLACK).unwrap();
+    fb_res.frame_buf.clear(Rgb565::BLACK).unwrap();
 
-    for (transform, _) in query.iter() {
+    for (transform, ball) in query.iter() {
         let circle = Circle::new(
             Point {
                 x: transform.translation.x as i32,
                 y: transform.translation.y as i32,
             },
-            20,
+            ball.radius,
         );
 
-        println!("drawing circle at {:?}", circle.center());
+        // println!("drawing circle at {:?}", circle.center());
 
         let draw_result = circle
-            .into_styled(PrimitiveStyle::with_fill(Rgb565::WHITE))
-            .draw(&mut fb_res.fb);
+            .into_styled(PrimitiveStyle::with_fill(ball.color))
+            .draw(&mut fb_res.frame_buf);
         match draw_result {
             Ok(_) => {}
             Err(e) => println!("draw_result: {:?}", e),
         };
     }
 
-    fb_res.fb.as_image().draw(&mut display.display).unwrap();
+    let area = Rectangle::new(Point::zero(), fb_res.frame_buf.size());
+    display_res
+        .display
+        .fill_contiguous(&area, fb_res.frame_buf.data.iter().copied())
+        .unwrap();
 }
 
 fn init_world(mut commands: Commands) {
     commands.spawn((
-        Ball,
+        Ball {
+            radius: 50,
+            color: Rgb565::CSS_BEIGE,
+        },
+        Transform::from_xyz(200.0, 150.0, 0.0),
+        Velocity { x: 1.0, y: 3.0 },
+    ));
+
+    commands.spawn((
+        Ball {
+            radius: 40,
+            color: Rgb565::CSS_LIME_GREEN,
+        },
+        Transform::from_xyz(150.0, 100.0, 0.0),
+        Velocity { x: -1.5, y: 2.3 },
+    ));
+
+    commands.spawn((
+        Ball {
+            radius: 30,
+            color: Rgb565::CSS_ORANGE_RED,
+        },
+        Transform::from_xyz(100.0, 100.0, 0.0),
+        Velocity { x: 2.2, y: -2.7 },
+    ));
+
+    commands.spawn((
+        Ball {
+            radius: 20,
+            color: Rgb565::CSS_INDIAN_RED,
+        },
+        Transform::from_xyz(50.0, 400.0, 0.0),
+        Velocity { x: -2.0, y: 2.0 },
+    ));
+
+    commands.spawn((
+        Ball {
+            radius: 10,
+            color: Rgb565::CSS_BURLY_WOOD,
+        },
         Transform::from_xyz(50.0, 50.0, 0.0),
-        Velocity { x: 0.01, y: 0.01 },
+        Velocity { x: 1.7, y: -3.1 },
     ));
 }
 
-#[hal::main]
+#[esp_hal::main]
 fn main() -> ! {
-    init_heap();
-    let peripherals = hal::init(hal::Config::default());
+    //init_heap();
+
+    let peripherals = esp_hal::init(esp_hal::Config::default());
+    esp_alloc::psram_allocator!(peripherals.PSRAM, esp_hal::psram);
     println!("Hello world!");
 
     let mut delay = Delay::new();
@@ -166,11 +225,12 @@ fn main() -> ! {
 
     let dma_channel = peripherals.DMA_CH0;
 
-    let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) = hal::dma_buffers!(32000, 32000);
-    let dma_rx_buf = hal::dma::DmaRxBuf::new(rx_descriptors, rx_buffer).unwrap();
-    let dma_tx_buf = hal::dma::DmaTxBuf::new(tx_descriptors, tx_buffer).unwrap();
+    let (rx_buffer, rx_descriptors, tx_buffer, tx_descriptors) =
+        esp_hal::dma_buffers!(32000, 32000);
+    let dma_rx_buf = esp_hal::dma::DmaRxBuf::new(rx_descriptors, rx_buffer).unwrap();
+    let dma_tx_buf = esp_hal::dma::DmaTxBuf::new(tx_descriptors, tx_buffer).unwrap();
 
-    let spi = Spi::new(
+    let spi = esp_hal::spi::master::Spi::new(
         peripherals.SPI2,
         SpiConfig::default()
             .with_frequency(Rate::from_mhz(75))
@@ -200,52 +260,42 @@ fn main() -> ! {
     let mut app = App::new();
     app.add_plugins((DefaultPlugins,))
         .insert_non_send_resource(DisplayResource { display })
-        .insert_non_send_resource(FramebufferResource {
-            fb: MyFrameBuffer::new(),
-        })
-        .add_systems(
-            Update,
-            (
-                //ball_movement,
-                render_system
-            ),
-        )
-        .add_systems(Startup, init_world)
-        .run();
+        .insert_resource(FrameBufferResource::new())
+        .add_systems(Update, (ball_movement, render_system))
+        .add_systems(Startup, init_world);
 
     let mut loop_delay = Delay::new();
 
-    loop {
-        // fps testing
-        // let mut s = String::new();
+    let mut cnt = 0;
+    let started = esp_hal::time::Instant::now()
+        .duration_since_epoch()
+        .as_millis();
 
-        // let elapsed = hal::time::Instant::now().duration_since_epoch().as_millis() - started;
-        // core::write!(
-        //     &mut s,
-        //     "Frames: {}\nFPS: {:.1}",
-        //     cnt,
-        //     if elapsed > 0 {
-        //         cnt as f32 / (elapsed as f32 / 1000.0)
-        //     } else {
-        //         0.0
-        //     }
-        // )
-        // .unwrap();
-        // Text::with_alignment(
-        //     &s,
-        //     Point::new(100, 40),
-        //     MonoTextStyleBuilder::new()
-        //         .background_color(Rgb565::BLACK)
-        //         .text_color(Rgb565::CSS_BISQUE)
-        //         .font(&FONT_10X20)
-        //         .build(),
-        //     Alignment::Center,
-        // )
-        // .draw(&mut display)
-        // .unwrap();
-        // cnt += 1;
+    println!("loop start");
+
+    loop {
+        //fps testing
+        let mut s = String::new();
+
+        let elapsed = esp_hal::time::Instant::now()
+            .duration_since_epoch()
+            .as_millis()
+            - started;
+        core::write!(
+            &mut s,
+            "FPS: {:.1}",
+            if elapsed > 0 {
+                cnt as f32 / (elapsed as f32 / 1000.0)
+            } else {
+                0.0
+            }
+        )
+        .unwrap();
+
+        println!("{}", s);
+        cnt += 1;
 
         app.update();
-        loop_delay.delay_millis(50u32);
+        //loop_delay.delay_millis(50u32);
     }
 }

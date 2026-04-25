@@ -15,7 +15,7 @@ default-run = "amoled"
 
 [dependencies]
 esp-bootloader-esp-idf = { version = "0.5.0", features = ["esp32s3"] }
-hal = { package = "esp-hal", version = "1.0.0", features = [
+esp-hal = { version = "1.0.0", features = [
     "esp32s3",
     "unstable",
 ] }
@@ -25,7 +25,7 @@ esp-backtrace = { version = "0.19.0", features = [
     "println",
 ] }
 esp-println = { version = "0.17.0", features = ["esp32s3"] }
-esp-alloc = { version = "0.3.0" }
+esp-alloc = "0.10.0"
 
 embassy-executor = { version = "0.5", features = [
     "nightly",
@@ -35,7 +35,7 @@ embassy-executor = { version = "0.5", features = [
 embassy-time = "0.3.0"
 
 
-embedded-hal-1 = { package = "embedded-hal", version = "1.0.0" }
+embedded-hal = { version = "1.0.0" }
 embedded-graphics = { version = "0.8.2", features = ["nalgebra_support"] }
 slint = { version = "1.0.2", default-features = false, features = [
     "compat-1-0",
@@ -47,10 +47,12 @@ libm = "0.2.16"
 
 bevy = { version = "0.18.1", default-features = false }
 bevy_platform = { version = "0.18.1", default-features = false }
+embedded-graphics-framebuf = "0.5.0"
+# esp-sync = { version = "0.2.1", features = ["esp32s3"] }
 
 
 [build-dependencies]
 slint-build = "1.0.0"
 
 [features]
-default = []
+default = [ "esp-hal/esp32s3", "esp-backtrace/esp32s3", "esp-println/esp32s3"]
